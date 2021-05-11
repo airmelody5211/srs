@@ -212,7 +212,8 @@ public:
 
 // A RTC play stream, client pull and play stream from SRS.
 class SrsRtcPlayStream : virtual public ISrsCoroutineHandler, virtual public ISrsReloadHandler
-    , virtual public ISrsHourGlass, virtual public ISrsRtcPLIWorkerHandler, public ISrsRtcStreamChangeCallback
+    , virtual public ISrsHourGlass, virtual public ISrsRtcPLIWorkerHandler, public ISrsRtcStreamChangeCallback,
+    public ISrsRtcIdleChecker
 {
 private:
     SrsContextId cid_;
@@ -275,6 +276,8 @@ private:
 // Interface ISrsRtcPLIWorkerHandler
 public:
     virtual srs_error_t do_request_keyframe(uint32_t ssrc, SrsContextId cid);
+    void check_idle(RtcIdleCheckResult *res);
+    uint32_t get_current_bytes();
 };
 
 // A RTC publish stream, client push and publish stream to SRS.

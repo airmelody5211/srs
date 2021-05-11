@@ -43,6 +43,8 @@
 #include <srs_protocol_json.hpp>
 #include <srs_app_pithy_print.hpp>
 #include <srs_app_log.hpp>
+#include <srs_app_rtmp_conn.hpp>
+#include <srs_service_http_client.hpp>
 
 #ifdef SRS_FFMPEG_FIT
 #include <srs_app_rtc_codec.hpp>
@@ -155,7 +157,7 @@ ISrsRtcStreamChangeCallback::~ISrsRtcStreamChangeCallback()
 {
 }
 
-SrsRtcConsumer::SrsRtcConsumer(SrsRtcStream* s)
+SrsRtcConsumer::SrsRtcConsumer(SrsRtcStream* s, ISrsRtcIdleChecker *idle_checker)
 {
     source = s;
     should_update_source_id = false;
@@ -164,6 +166,7 @@ SrsRtcConsumer::SrsRtcConsumer(SrsRtcStream* s)
     mw_wait = srs_cond_new();
     mw_min_msgs = 0;
     mw_waiting = false;
+    idle_checker_ = idle_checker;
 }
 
 SrsRtcConsumer::~SrsRtcConsumer()
@@ -242,19 +245,76 @@ void SrsRtcConsumer::on_stream_change(SrsRtcStreamDescription* desc)
     }
 }
 
+void SrsRtcConsumer::check_idle(RtcIdleCheckResult *res) {
+    idle_checker_->check_idle(res);
+ }
+
 SrsRtcStreamManager::SrsRtcStreamManager()
 {
     lock = NULL;
+    trd_ = NULL;
 }
 
 SrsRtcStreamManager::~SrsRtcStreamManager()
 {
     srs_mutex_destroy(lock);
+    if (trd_) {
+        trd_->stop();
+    }
+}
+
+srs_error_t SrsRtcStreamManager::cycle() {
+    srs_error_t err = srs_success;
+
+    uint32_t count = 0;
+    uint32_t elapsed = 0;
+    int infoInter = _srs_config->get_report_info_interval();
+    int reportInter = _srs_config->get_report_interval();
+    int max = infoInter > reportInter ? infoInter : reportInter;
+
+    while (true) {
+        // We always check status first.
+        // @see https://github.com/ossrs/srs/issues/1634#issuecomment-597571561
+        if ((err = trd_->pull()) != srs_success) {
+            return srs_error_wrap(err, "srs rtc rtmp upstream");
+        }
+
+        if (elapsed % infoInter == 0) {
+            std::map<std::string, SrsRtcStream*>::iterator it;
+            for (it = pool.begin(); it != pool.end(); it++) {
+                SrsRtcStream *s = it->second;
+                count += s->get_consumers();
+            }
+
+            report_info(count);
+            count = 0;
+        }
+
+        if (elapsed % reportInter == 0) {
+            std::map<std::string, SrsRtcStream*>::iterator it;
+            for (it = pool.begin(); it != pool.end(); it++) {
+                SrsRtcStream *s = it->second;
+                s->check_idle();
+            }
+        }
+
+        if (elapsed == max) {
+            elapsed == 0;
+        }
+
+        srs_usleep(SRS_UTIME_SECONDS/1000);
+        elapsed++;
+    }
 }
 
 srs_error_t SrsRtcStreamManager::fetch_or_create(SrsRequest* r, SrsRtcStream** pps)
 {
     srs_error_t err = srs_success;
+
+    if (trd_ == NULL) {
+        trd_ = new SrsSTCoroutine("rtc-stream-manager-idle-checker", this);
+        trd_->start();
+    }
 
     // Lazy create lock, because ST is not ready in SrsRtcStreamManager constructor.
     if (!lock) {
@@ -284,6 +344,14 @@ srs_error_t SrsRtcStreamManager::fetch_or_create(SrsRequest* r, SrsRtcStream** p
         return srs_error_wrap(err, "init source %s", r->get_stream_url().c_str());
     }
 
+    SrsRtcFromRtmpBridger *bridger = new SrsRtcFromRtmpBridger(source);
+    if ((err = bridger->initialize(r)) != srs_success) {
+        srs_freep(bridger);
+        return srs_error_wrap(err, "source bridger init");
+    }
+
+    source->set_source_bridger(bridger);
+
     pool[stream_url] = source;
 
     *pps = source;
@@ -310,6 +378,40 @@ SrsRtcStream* SrsRtcStreamManager::fetch(SrsRequest* r)
     return source;
 }
 
+srs_error_t SrsRtcStreamManager::report_info(uint32_t count) {
+    srs_error_t err = srs_success;
+
+    SrsHttpUri url;
+    std::string report_info_url = _srs_config->get_report_info_url();
+    err = url.initialize(report_info_url);
+    if (err != srs_success) {
+        srs_warn("invalid report_info_url %s", report_info_url.c_str());
+        return err;
+    }
+
+    SrsHttpClient hc;
+    int port = url.get_port();
+    srs_utime_t timeout = 3*SRS_UTIME_SECONDS;
+    err = hc.initialize(url.get_schema(), url.get_host(), port, timeout);
+    if (err != srs_success) {
+        srs_warn("invalid report_info_url %s", report_info_url.c_str());
+        return err;
+    }
+
+    SrsJsonObject *post = SrsJsonAny::object();
+    SrsAutoFree(SrsJsonObject, post);
+    post->set("id", SrsJsonAny::str(_srs_config->get_http_api_listen().c_str()));
+    post->set("count", SrsJsonAny::integer(count));
+
+    srs_trace("report info url=%s post=%s", report_info_url.c_str(), post->dumps().c_str());
+
+    ISrsHttpMessage *postres = NULL;
+    SrsAutoFree(ISrsHttpMessage, postres);
+    hc.post(url.get_path(), post->dumps(), &postres);
+
+    return err;
+ }
+
 SrsRtcStreamManager* _srs_rtc_sources = new SrsRtcStreamManager();
 
 ISrsRtcPublishStream::ISrsRtcPublishStream()
@@ -334,6 +436,143 @@ ISrsRtcSourceBridger::ISrsRtcSourceBridger()
 
 ISrsRtcSourceBridger::~ISrsRtcSourceBridger()
 {
+}
+
+SrsRtcRtmpUpstream::SrsRtcRtmpUpstream(ISrsSourceBridger *bridger, SrsRtcStream *parent) {
+    trd_ = NULL;
+    sdk_ = NULL;
+    bridger_ = bridger;
+    parent_ = parent;
+    stopped = false;
+    ended = false;
+ }
+
+ SrsRtcRtmpUpstream::~SrsRtcRtmpUpstream() {
+    clear();
+
+    if (trd_) {
+        trd_->stop();
+        srs_freep(trd_);
+        trd_ = NULL;
+    }
+ }
+
+ void SrsRtcRtmpUpstream::clear() {
+    if (sdk_) {
+        srs_trace("rtmp upstream: stopped");
+        sdk_->close();
+        srs_freep(sdk_);
+        sdk_ = NULL;
+    }
+ }
+
+ srs_error_t SrsRtcRtmpUpstream::start(std::string rtmpurl) {
+    srs_error_t err = srs_success;
+
+    srs_trace("RTC: rtmpurl=%s", rtmpurl.c_str());
+
+    if (rtmpurl == "") {
+        return err;
+    }
+
+    trd_ = new SrsSTCoroutine("rtc-rtmp-upstream", this);
+    trd_->set_stack_size(1024*256);
+
+    rtmpurl_ = rtmpurl;
+
+    if ((err = trd_->start()) != srs_success) {
+        return srs_error_wrap(err, "coroutine");
+    }
+
+    return err;
+ }
+
+ srs_error_t SrsRtcRtmpUpstream::do_cycle() {
+    srs_error_t err = srs_success;
+
+    srs_utime_t cto = 10 * SRS_UTIME_SECONDS;
+    srs_utime_t sto = 10 * SRS_UTIME_SECONDS;
+    std::string url = rtmpurl_;
+
+    SrsSimpleRtmpClient* sdk = new SrsSimpleRtmpClient(url, cto, sto);
+    sdk_ = sdk;
+
+    srs_trace("rtmp upstream: connecting %s", url.c_str());
+
+    if ((err = sdk->connect()) != srs_success) {
+        err = srs_error_wrap(err, "sdk connect");
+        return err;
+    }
+
+    srs_trace("rtmp upstream: connected");
+
+    if ((err = sdk->play(65536)) != srs_success) {
+        err = srs_error_wrap(err, "sdk publish");
+        return err;
+    }
+
+    srs_trace("rtmp upstream: start play");
+
+    while (true) {
+        SrsCommonMessage* msg = NULL;
+        if ((err = sdk->recv_message(&msg)) != srs_success) {
+            err = srs_error_wrap(err, "recv message");
+            return err;
+        }
+
+        if (stopped) {
+            return err;
+        }
+
+        if (msg->header.is_video()) {
+            SrsSharedPtrMessage msg2;
+            if ((err = msg2.create(msg)) != srs_success) {
+                err = srs_error_wrap(err, "create message");
+                return err;
+            }
+            if ((err = bridger_->on_video(&msg2)) != srs_success) {
+                err = srs_error_wrap(err, "bridger");
+                return err;
+            }
+        } else if (msg->header.is_audio()) {
+            SrsSharedPtrMessage msg2;
+            if ((err = msg2.create(msg)) != srs_success) {
+                err = srs_error_wrap(err, "create message");
+                return err;
+            }
+
+            if ((err = bridger_->on_audio(&msg2)) != srs_success) {
+                err = srs_error_wrap(err, "bridger");
+                return err;
+            }
+        }
+    }
+
+    return err;
+ }
+
+ srs_error_t SrsRtcRtmpUpstream::cycle() {
+    srs_error_t err = srs_success;
+
+    srs_usleep(1 * SRS_UTIME_SECONDS);
+
+    while (true) {
+        // We always check status first.
+        // @see https://github.com/ossrs/srs/issues/1634#issuecomment-597571561
+        if ((err = trd_->pull()) != srs_success) {
+            return srs_error_wrap(err, "srs rtc rtmp upstream");
+        }
+
+        do_cycle();
+        clear();
+
+        if (stopped) {
+            ended = true;
+            return err;
+        }
+
+        srs_usleep(3 * SRS_UTIME_SECONDS);
+    }
 }
 
 SrsRtcStream::SrsRtcStream()
@@ -422,11 +661,80 @@ void SrsRtcStream::set_bridger(ISrsRtcSourceBridger *bridger)
     bridger_ = bridger;
 }
 
-srs_error_t SrsRtcStream::create_consumer(SrsRtcConsumer*& consumer)
+void SrsRtcStream::set_source_bridger(ISrsSourceBridger *bridger)
+{
+    srs_freep(source_bridger_);
+    source_bridger_ = bridger;
+}
+
+void SrsRtcStream::check_idle() {
+
+     std::vector<SrsRtcRtmpUpstream*>::iterator it;
+     for (it = rtmp_upstreams_.begin(); it != rtmp_upstreams_.end(); ) {
+         SrsRtcRtmpUpstream *s = *it;
+         if (s->ended) {
+             it = rtmp_upstreams_.erase(it);
+             srs_freep(s);
+         } else {
+             it++;
+         }
+     }
+
+     std::vector<SrsRtcConsumer*>::iterator iter;
+     for (iter = consumers.begin(); iter != consumers.end(); iter++) {
+        SrsRtcConsumer *c = *iter;
+        RtcIdleCheckResult check = {};
+
+        c->check_idle(&check);
+
+        SrsHttpUri url;
+        std::string report_url = _srs_config->get_report_url();
+        if (url.initialize(report_url) != srs_success) {
+            srs_warn("invalid report_url %s", report_url.c_str());
+            return;
+        }
+
+        SrsHttpClient hc;
+        int port = url.get_port();
+        srs_utime_t timeout = 3*SRS_UTIME_SECONDS;
+        if (hc.initialize(url.get_schema(), url.get_host(), port, timeout) != srs_success) {
+            srs_warn("invalid report_url %s", report_url.c_str());
+            return;
+        }
+
+        SrsJsonObject *post = SrsJsonAny::object();
+        SrsAutoFree(SrsJsonObject, post);
+        post->set("hub", SrsJsonAny::str(req->hub.c_str()));
+        post->set("uid", SrsJsonAny::integer(req->uid));
+        post->set("domain", SrsJsonAny::str(req->host.c_str()));
+        post->set("reqId", SrsJsonAny::str(check.reqid.c_str()));
+        post->set("stream", SrsJsonAny::str(req->stream.c_str()));
+        post->set("method", SrsJsonAny::str(req->method.c_str()));
+        post->set("bytes", SrsJsonAny::integer(check.bytes));
+        post->set("duration", SrsJsonAny::integer(_srs_config->get_report_interval()/1000));
+        post->set("localAddr", SrsJsonAny::str(check.localAddr.c_str()));
+        post->set("remoteAddr", SrsJsonAny::str(check.remoteAddr.c_str()));
+
+        srs_trace("report url=%s post=%s", report_url.c_str(), post->dumps().c_str());
+
+        ISrsHttpMessage *postres = NULL;
+        SrsAutoFree(ISrsHttpMessage, postres);
+        hc.post(url.get_path(), post->dumps(), &postres);
+    }
+ }
+
+srs_error_t SrsRtcStream::create_consumer(SrsRtcConsumer*& consumer, ISrsRtcIdleChecker *idle_checker)
 {
     srs_error_t err = srs_success;
 
-    consumer = new SrsRtcConsumer(this);
+    if (consumers.size() == 0) {
+        SrsRtcRtmpUpstream *s = new SrsRtcRtmpUpstream(source_bridger_, this);
+        s->start(req->rtmpUrl);
+        rtmp_upstreams_.push_back(s);
+        bridger_->on_publish();
+    }
+
+    consumer = new SrsRtcConsumer(this, idle_checker);
     consumers.push_back(consumer);
 
     // TODO: FIXME: Implements edge cluster.
@@ -459,6 +767,15 @@ void SrsRtcStream::on_consumer_destroy(SrsRtcConsumer* consumer)
             h->on_consumers_finished();
         }
     }
+
+    if (consumers.size() == 0) {
+        bridger_->on_unpublish();
+        std::vector<SrsRtcRtmpUpstream*>::iterator iter;
+        for (iter = rtmp_upstreams_.begin(); iter != rtmp_upstreams_.end(); iter++) {
+            SrsRtcRtmpUpstream *s = *iter;
+            s->stopped = true;
+        }
+     }
 }
 
 bool SrsRtcStream::can_publish()
@@ -626,6 +943,10 @@ std::vector<SrsRtcTrackDescription*> SrsRtcStream::get_track_desc(std::string ty
     return track_descs;
 }
 
+uint32_t SrsRtcStream::get_consumers() {
+    return consumers.size();
+}
+
 srs_error_t SrsRtcStream::on_timer(srs_utime_t interval, srs_utime_t tick)
 {
     srs_error_t err = srs_success;
@@ -772,9 +1093,41 @@ void SrsRtcFromRtmpBridger::on_unpublish()
     source_->on_unpublish();
 }
 
+srs_error_t SrsRtcFromRtmpBridger::on_audio_opus(SrsSharedPtrMessage *msg)
+{
+    srs_error_t err = srs_success;
+
+    SrsRtpPacket2* pkt = NULL;
+    SrsAutoFree(SrsRtpPacket2, pkt);
+
+    SrsAudioFrame opus;
+    opus.add_sample(msg->payload+2, msg->size-2);
+
+    SrsRtpPacketCacheHelper* helper = new SrsRtpPacketCacheHelper();
+    SrsAutoFree(SrsRtpPacketCacheHelper, helper);
+
+    // skip two bytes, flv audio tag header, aac/opus header(decided by ffmpeg flvenc.c)
+    if ((err = package_opus(&opus, helper)) != srs_success) {
+        return srs_error_wrap(err, "package opus");
+    }
+
+    if ((err = source_->on_rtp(pkt)) != srs_success) {
+        return srs_error_wrap(err, "consume opus");
+    }
+    return err;
+}
+
 srs_error_t SrsRtcFromRtmpBridger::on_audio(SrsSharedPtrMessage* msg)
 {
     srs_error_t err = srs_success;
+
+    if (SrsFlvAudio::opus(msg->payload, msg->size)) {
+         // For bridger to consume the message.
+         if ((err = this->on_audio_opus(msg)) != srs_success) {
+             return srs_error_wrap(err, "bridger consume audio");
+         }
+         return err;
+    }
 
     // TODO: FIXME: Support parsing OPUS for RTC.
     if ((err = format->on_audio(msg)) != srs_success) {
@@ -2611,6 +2964,7 @@ srs_error_t SrsRtcAudioSendTrack::on_rtp(SrsRtpPacket2* pkt)
     // track level statistic
     // TODO: FIXME: if send packets failed, statistic is no correct.
     statistic_->packets++;
+    statistic_->last_bytes = statistic_->bytes;
     statistic_->bytes += pkt->nb_bytes();
 
     if ((err = session_->do_send_packet(pkt)) != srs_success) {
@@ -2665,6 +3019,7 @@ srs_error_t SrsRtcVideoSendTrack::on_rtp(SrsRtpPacket2* pkt)
     // track level statistic
     // TODO: FIXME: if send packets failed, statistic is no correct.
     statistic->packets++;
+    statistic_->last_bytes = statistic_->bytes;
     statistic->bytes += pkt->nb_bytes();
 
     if ((err = session_->do_send_packet(pkt)) != srs_success) {

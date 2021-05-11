@@ -144,6 +144,19 @@ srs_error_t SrsGoApiRtcPlay::do_serve_http(ISrsHttpResponseWriter* w, ISrsHttpMe
     string srtp = r->query_get("encrypt");
     string dtls = r->query_get("dtls");
 
+    {
+        SrsHttpUri url;
+        if (url.initialize(streamurl) == srs_success) {
+            std::map<std::string, std::string> q;
+            srs_parse_query_string(url.get_query(), q);
+            const char *key = "eip";
+            if (q.find(key) != q.end()) {
+                eip = q[key];
+                srs_trace("use eip=%s from streamurl", eip.c_str());
+            }
+        }
+    }
+
     srs_trace("RTC play %s, api=%s, tid=%s, clientip=%s, app=%s, stream=%s, offer=%dB, eip=%s, codec=%s, srtp=%s, dtls=%s",
         streamurl.c_str(), api.c_str(), tid.c_str(), clientip.c_str(), app.c_str(), stream_name.c_str(), remote_sdp_str.length(),
         eip.c_str(), codec.c_str(), srtp.c_str(), dtls.c_str()
@@ -173,6 +186,34 @@ srs_error_t SrsGoApiRtcPlay::do_serve_http(ISrsHttpResponseWriter* w, ISrsHttpMe
 
     ruc.req_->app = app;
     ruc.req_->stream = stream_name;
+
+    if ((prop = req->ensure_property_string("domain")) != NULL) {
+        ruc.req_->host = prop->to_str();
+    }
+
+    if ((prop = req->ensure_property_string("rtmpurl")) != NULL) {
+        ruc.req_->rtmpUrl = prop->to_str();
+    }
+
+    if ((prop = req->ensure_property_string("hub")) != NULL) {
+        ruc.req_->hub = prop->to_str();
+    }
+
+    if ((prop = req->ensure_property_integer("uid")) != NULL) {
+        ruc.req_->uid = prop->to_integer();
+    }
+
+    if ((prop = req->ensure_property_string("stream")) != NULL) {
+        ruc.req_->stream = prop->to_str();
+    }
+
+    if ((prop = req->ensure_property_string("method")) != NULL) {
+        ruc.req_->method = prop->to_str();
+    }
+    
+    if (ruc.req_->rtmpUrl == "") {
+        ruc.req_->rtmpUrl = _srs_config->get_default_rtc_rtmp_souce();
+    }
 
     // TODO: FIXME: Parse vhost.
     // discovery vhost, resolve the vhost from config

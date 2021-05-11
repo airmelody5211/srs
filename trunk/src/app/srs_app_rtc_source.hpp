@@ -25,6 +25,7 @@
 #define SRS_APP_RTC_SOURCE_HPP
 
 #include <srs_core.hpp>
+#include <srs_app_st.hpp>
 
 #include <vector>
 #include <map>
@@ -37,6 +38,7 @@
 #include <srs_service_st.hpp>
 #include <srs_app_source.hpp>
 #include <srs_kernel_rtc_rtp.hpp>
+#include <srs_app_rtmp_conn.hpp>
 
 class SrsRequest;
 class SrsMetaCache;
@@ -56,6 +58,24 @@ class SrsRtpRingBuffer;
 class SrsRtpNackForReceiver;
 class SrsJsonObject;
 class SrsErrorPithyPrint;
+class ISrsRtcIdleChecker;
+
+class RtcIdleCheckResult
+{
+public:
+    int bytes;
+    std::string reqid;
+    std::string remoteAddr;
+    std::string localAddr;
+};
+
+class ISrsRtcIdleChecker
+{
+public:
+    ISrsRtcIdleChecker() {}
+    virtual ~ISrsRtcIdleChecker() {}
+    virtual void check_idle(RtcIdleCheckResult *res) = 0;
+};
 
 class SrsNtp
 {
@@ -85,7 +105,7 @@ public:
 };
 
 // The RTC stream consumer, consume packets from RTC stream source.
-class SrsRtcConsumer
+class SrsRtcConsumer : public ISrsRtcIdleChecker
 {
 private:
     SrsRtcStream* source;
@@ -101,7 +121,7 @@ private:
     // The callback for stream change event.
     ISrsRtcStreamChangeCallback* handler_;
 public:
-    SrsRtcConsumer(SrsRtcStream* s);
+    SrsRtcConsumer(SrsRtcStream* s, ISrsRtcIdleChecker *idle_checker);
     virtual ~SrsRtcConsumer();
 public:
     // When source id changed, notice client to print.
@@ -113,19 +133,27 @@ public:
     virtual srs_error_t dump_packet(SrsRtpPacket2** ppkt);
     // Wait for at-least some messages incoming in queue.
     virtual void wait(int nb_msgs);
+    void check_idle(RtcIdleCheckResult *res);
 public:
     void set_handler(ISrsRtcStreamChangeCallback* h) { handler_ = h; } // SrsRtcConsumer::set_handler()
     void on_stream_change(SrsRtcStreamDescription* desc);
+
+private:
+    ISrsRtcIdleChecker* idle_checker_;
 };
 
-class SrsRtcStreamManager
+class SrsRtcStreamManager : public ISrsCoroutineHandler
 {
 private:
     srs_mutex_t lock;
     std::map<std::string, SrsRtcStream*> pool;
+    SrsSTCoroutine* trd_;
+
 public:
     SrsRtcStreamManager();
     virtual ~SrsRtcStreamManager();
+
+    virtual srs_error_t cycle();
 public:
     //  create source when fetch from cache failed.
     // @param r the client request.
@@ -135,6 +163,7 @@ private:
     // Get the exists source, NULL when not exists.
     // update the request and return the exists source.
     virtual SrsRtcStream* fetch(SrsRequest* r);
+    virtual srs_error_t report_info(uint32_t count);
 };
 
 // Global singleton instance.
@@ -175,6 +204,24 @@ public:
     virtual void on_unpublish() = 0;
 };
 
+class SrsRtcRtmpUpstream: public ISrsCoroutineHandler {
+public:
+    SrsSTCoroutine* trd_;
+    virtual srs_error_t cycle();
+    srs_error_t do_cycle();
+    srs_error_t start(std::string rtmpurl);
+    SrsRtcRtmpUpstream(ISrsSourceBridger* bridger, SrsRtcStream* parent);
+    virtual ~SrsRtcRtmpUpstream() ;
+    bool stopped;
+    bool ended;
+private:
+    void clear();
+    SrsRtcStream *parent_;
+    ISrsSourceBridger* bridger_;
+    SrsSimpleRtmpClient* sdk_;
+    std::string rtmpurl_;
+};
+
 // A Source is a stream, to publish and to play with, binding to SrsRtcPublishStream and SrsRtcPlayStream.
 class SrsRtcStream : public ISrsFastTimer
 {
@@ -192,9 +239,11 @@ private:
     SrsRtcStreamDescription* stream_desc_;
     // The Source bridger, bridger stream to other source.
     ISrsRtcSourceBridger* bridger_;
+    ISrsSourceBridger* source_bridger_;
 private:
     // To delivery stream to clients.
     std::vector<SrsRtcConsumer*> consumers;
+    std::vector<SrsRtcRtmpUpstream*> rtmp_upstreams_;
     // Whether stream is created, that is, SDP is done.
     bool is_created_;
     // Whether stream is delivering data, that is, DTLS is done.
@@ -217,10 +266,12 @@ public:
     virtual SrsContextId pre_source_id();
 public:
     void set_bridger(ISrsRtcSourceBridger *bridger);
+    void set_source_bridger(ISrsSourceBridger *bridger);
+    void check_idle();
 public:
     // Create consumer
     // @param consumer, output the create consumer.
-    virtual srs_error_t create_consumer(SrsRtcConsumer*& consumer);
+    virtual srs_error_t create_consumer(SrsRtcConsumer*& consumer, ISrsRtcIdleChecker* idle_checker);
     // Dumps packets in cache to consumer.
     // @param ds, whether dumps the sequence header.
     // @param dm, whether dumps the metadata.
@@ -251,6 +302,7 @@ public:
     void set_stream_desc(SrsRtcStreamDescription* stream_desc);
     std::vector<SrsRtcTrackDescription*> get_track_desc(std::string type, std::string media_type);
 // interface ISrsFastTimer
+    uint32_t get_consumers();
 private:
     srs_error_t on_timer(srs_utime_t interval, srs_utime_t tick);
 };
@@ -292,6 +344,7 @@ public:
     virtual srs_error_t on_publish();
     virtual void on_unpublish();
     virtual srs_error_t on_audio(SrsSharedPtrMessage* msg);
+    virtual srs_error_t on_audio_opus(SrsSharedPtrMessage* msg);
 private:
     srs_error_t transcode(SrsAudioFrame* audio);
     srs_error_t package_opus(SrsAudioFrame* audio, SrsRtpPacketCacheHelper* helper);
@@ -660,6 +713,7 @@ public:
     bool set_track_status(bool active);
     bool get_track_status();
     std::string get_track_id();
+    SrsRtcTrackStatistic* get_statistic() {return statistic_;}
 public:
     // Note that we can set the pkt to NULL to avoid copy, for example, if the NACK cache the pkt and
     // set to NULL, nack nerver copy it but set the pkt to NULL.

@@ -566,7 +566,7 @@ srs_error_t SrsRtcPlayStream::cycle()
 
     SrsRtcConsumer* consumer = NULL;
     SrsAutoFree(SrsRtcConsumer, consumer);
-    if ((err = source->create_consumer(consumer)) != srs_success) {
+    if ((err = source->create_consumer(consumer, this)) != srs_success) {
         return srs_error_wrap(err, "create consumer, source=%s", req_->get_stream_url().c_str());
     }
 
@@ -624,6 +624,30 @@ srs_error_t SrsRtcPlayStream::cycle()
         _srs_rtp_cache->recycle(pkt);
     }
 }
+
+void SrsRtcPlayStream::check_idle(RtcIdleCheckResult *res) {
+    res->bytes = this->get_current_bytes();
+    res->reqid = session_->username();
+    res->localAddr = "";
+    res->remoteAddr = "";
+    std::vector<SrsUdpMuxSocket*> addrs = session_->peer_addresses();
+    if (addrs.size() > 0) {
+        res->remoteAddr = addrs[0]->get_peer_ip();
+    }
+ }
+
+ uint32_t SrsRtcPlayStream::get_current_bytes() {
+     uint32_t bytes = 0;
+     for (auto iter = this->audio_tracks_.begin(); iter != this->audio_tracks_.end(); ++iter) {
+         bytes += iter->second->get_statistic()->bytes;
+     }
+
+     for (auto iter = this->video_tracks_.begin(); iter != this->video_tracks_.end(); ++iter) {
+         bytes += iter->second->get_statistic()->bytes;
+     }
+
+     return bytes;
+ }
 
 srs_error_t SrsRtcPlayStream::send_packet(SrsRtpPacket2*& pkt)
 {
