@@ -299,7 +299,7 @@ srs_error_t SrsRtcStreamManager::cycle() {
         }
 
         if (elapsed == max) {
-            elapsed == 0;
+            elapsed = 0;
         }
 
         srs_usleep(SRS_UTIME_SECONDS/1000);
@@ -469,6 +469,7 @@ SrsRtcRtmpUpstream::SrsRtcRtmpUpstream(ISrsSourceBridger *bridger, SrsRtcStream 
  srs_error_t SrsRtcRtmpUpstream::start(std::string rtmpurl) {
     srs_error_t err = srs_success;
 
+    //rtmpurl = "rtmp://pili-rtmp.qnsdk.com/sdk-live/test";
     srs_trace("RTC: rtmpurl=%s", rtmpurl.c_str());
 
     if (rtmpurl == "") {
@@ -530,6 +531,7 @@ SrsRtcRtmpUpstream::SrsRtcRtmpUpstream(ISrsSourceBridger *bridger, SrsRtcStream 
                 err = srs_error_wrap(err, "create message");
                 return err;
             }
+
             if ((err = bridger_->on_video(&msg2)) != srs_success) {
                 err = srs_error_wrap(err, "bridger");
                 return err;
@@ -585,6 +587,7 @@ SrsRtcStream::SrsRtcStream()
 
     req = NULL;
     bridger_ = NULL;
+    source_bridger_ = NULL;
 }
 
 SrsRtcStream::~SrsRtcStream()
@@ -731,7 +734,6 @@ srs_error_t SrsRtcStream::create_consumer(SrsRtcConsumer*& consumer, ISrsRtcIdle
         SrsRtcRtmpUpstream *s = new SrsRtcRtmpUpstream(source_bridger_, this);
         s->start(req->rtmpUrl);
         rtmp_upstreams_.push_back(s);
-        bridger_->on_publish();
     }
 
     consumer = new SrsRtcConsumer(this, idle_checker);
@@ -769,7 +771,10 @@ void SrsRtcStream::on_consumer_destroy(SrsRtcConsumer* consumer)
     }
 
     if (consumers.size() == 0) {
-        bridger_->on_unpublish();
+        if (bridger_) {
+            bridger_->on_unpublish();
+        }
+
         std::vector<SrsRtcRtmpUpstream*>::iterator iter;
         for (iter = rtmp_upstreams_.begin(); iter != rtmp_upstreams_.end(); iter++) {
             SrsRtcRtmpUpstream *s = *iter;

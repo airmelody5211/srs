@@ -391,7 +391,7 @@ srs_error_t SrsRtcServer::listen_udp()
         }
     }
 
-    srs_assert(listeners.empty());
+    srs_assert(!listeners.empty());
 
     return err;
 }

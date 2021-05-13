@@ -962,9 +962,10 @@ srs_error_t SrsRtmpConn::acquire_publish(SrsSource* source)
     SrsRequest* req = info->req;
 
     // Check whether RTC stream is busy.
-    /*
+
 #ifdef SRS_RTC
     SrsRtcStream *rtc = NULL;
+    /*
     bool rtc_server_enabled = _srs_config->get_rtc_server_enabled();
     bool rtc_enabled = _srs_config->get_rtc_enabled(req->vhost);
     if (rtc_server_enabled && rtc_enabled && !info->edge) {
@@ -975,9 +976,9 @@ srs_error_t SrsRtmpConn::acquire_publish(SrsSource* source)
         if (!rtc->can_publish()) {
             return srs_error_new(ERROR_RTC_SOURCE_BUSY, "rtc stream %s busy", req->get_stream_url().c_str());
         }
-    }
+    }*/
 #endif
-    */
+
 
     // Check whether RTMP stream is busy.
     if (!source->can_publish(info->edge)) {
@@ -985,7 +986,7 @@ srs_error_t SrsRtmpConn::acquire_publish(SrsSource* source)
     }
 
     // Bridge to RTC streaming.
-    /*
+
 #if defined(SRS_RTC) && defined(SRS_FFMPEG_FIT)
     if (rtc) {
         SrsRtcFromRtmpBridger *bridger = new SrsRtcFromRtmpBridger(rtc);
@@ -997,7 +998,7 @@ srs_error_t SrsRtmpConn::acquire_publish(SrsSource* source)
         source->set_bridger(bridger);
     }
 #endif
-    */
+
     // Start publisher now.
     if (info->edge) {
         return source->on_edge_start_publish();
