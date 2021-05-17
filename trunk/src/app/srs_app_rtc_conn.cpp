@@ -638,11 +638,11 @@ void SrsRtcPlayStream::check_idle(RtcIdleCheckResult *res) {
 
  uint32_t SrsRtcPlayStream::get_current_bytes() {
      uint32_t bytes = 0;
-     for (auto iter = this->audio_tracks_.begin(); iter != this->audio_tracks_.end(); ++iter) {
+     for (std::map<uint32_t, SrsRtcAudioSendTrack*>::iterator iter = this->audio_tracks_.begin(); iter != this->audio_tracks_.end(); ++iter) {
          bytes += iter->second->get_statistic()->bytes;
      }
 
-     for (auto iter = this->video_tracks_.begin(); iter != this->video_tracks_.end(); ++iter) {
+     for (std::map<uint32_t, SrsRtcVideoSendTrack*>::iterator iter = this->video_tracks_.begin(); iter != this->video_tracks_.end(); ++iter) {
          bytes += iter->second->get_statistic()->bytes;
      }
 
