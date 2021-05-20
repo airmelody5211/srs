@@ -368,7 +368,8 @@ srs_error_t SrsUdpMuxSocket::sendto(void* data, int size, srs_utime_t timeout)
 
     // Yield to another coroutines.
     // @see https://github.com/ossrs/srs/issues/2194#issuecomment-777542162
-    if (++nn_msgs_for_yield_ > 20) {
+
+    if (++nn_msgs_for_yield_ > 40) {
         nn_msgs_for_yield_ = 0;
         srs_thread_yield();
     }
