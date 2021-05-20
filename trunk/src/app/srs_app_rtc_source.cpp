@@ -76,7 +76,8 @@ const int kVideoSamplerate  = 90000;
 //      kRtpPacketSize = kRtpMaxPayloadSize + paddings
 // For example, if kRtpPacketSize is 1500, recommend to set kRtpMaxPayloadSize to 1400,
 // which reserves 100 bytes for SRTP or paddings.
-const int kRtpMaxPayloadSize = kRtpPacketSize - 200;
+const int kRtpMaxPayloadSize = kRtpPacketSize - 100;
+const int kRtpMinPayloadSize = 10;
 
 using namespace std;
 
@@ -1462,6 +1463,11 @@ srs_error_t SrsRtcFromRtmpBridger::package_nalus(SrsSharedPtrMessage* msg, const
         int nb_left = nn_bytes - 1;
 
         int num_of_packet = 1 + (nn_bytes - 1) / fu_payload_size;
+
+        if ((nb_left % fu_payload_size) < kRtpMinPayloadSize) {
+            fu_payload_size = static_cast<int>(ceil(float(nb_left / (num_of_packet+1))));
+        }
+
         for (int i = 0; i < num_of_packet; ++i) {
             int packet_size = srs_min(nb_left, fu_payload_size);
 
@@ -1533,6 +1539,11 @@ srs_error_t SrsRtcFromRtmpBridger::package_fu_a(SrsSharedPtrMessage* msg, SrsSam
     uint8_t nal_type = header & kNalTypeMask;
 
     int num_of_packet = 1 + (sample->size - 1) / fu_payload_size;
+
+    if ((nb_left % fu_payload_size) < kRtpMinPayloadSize) {
+        fu_payload_size = static_cast<int>(ceil(float(nb_left / (num_of_packet+1))));
+    }
+
     for (int i = 0; i < num_of_packet; ++i) {
         int packet_size = srs_min(nb_left, fu_payload_size);
 
