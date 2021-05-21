@@ -1407,10 +1407,10 @@ srs_error_t SrsRtcFromRtmpBridger::adjust_packet(const uint8_t remain, const int
     if (remain == 0) {
         --num_of_packet;
     } else if (remain < kRtpMinPayloadSize){
-        int new_fu_payload_size = static_cast<int>(ceil(float(nb_left / (num_of_packet))));
+        int new_fu_payload_size = static_cast<int>(ceil(float(nb_left)/num_of_packet));
         if (new_fu_payload_size == fu_payload_size){
             ++num_of_packet;
-            new_fu_payload_size = static_cast<int>(ceil(float(nb_left / (num_of_packet))));
+            new_fu_payload_size = static_cast<int>(ceil(float(nb_left)/num_of_packet));
             assert(new_fu_payload_size != fu_payload_size);
         }
         fu_payload_size = new_fu_payload_size;
