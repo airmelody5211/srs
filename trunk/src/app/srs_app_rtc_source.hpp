@@ -357,6 +357,7 @@ private:
     srs_error_t package_single_nalu(SrsSharedPtrMessage* msg, SrsSample* sample, std::vector<SrsRtpPacketCacheHelper*>& helpers);
     srs_error_t package_fu_a(SrsSharedPtrMessage* msg, SrsSample* sample, int fu_payload_size, std::vector<SrsRtpPacketCacheHelper*>& helpers);
     srs_error_t consume_packets(std::vector<SrsRtpPacketCacheHelper*>& helpers);
+    srs_error_t adjust_packet(const uint8_t remain, const int &nn_left, int &num_of_packet, int &fu_payload_size);
 };
 
 class SrsRtmpFromRtcBridger : public ISrsRtcSourceBridger

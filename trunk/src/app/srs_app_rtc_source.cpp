@@ -1401,6 +1401,23 @@ srs_error_t SrsRtcFromRtmpBridger::package_stap_a(SrsRtcStream* source, SrsShare
     return err;
 }
 
+srs_error_t SrsRtcFromRtmpBridger::adjust_packet(const uint8_t remain, const int &nb_left, int &num_of_packet, int &fu_payload_size)
+{
+    srs_error_t err = srs_success;
+    if (remain == 0) {
+        --num_of_packet;
+    } else if (remain < kRtpMinPayloadSize){
+        int new_fu_payload_size = static_cast<int>(ceil(float(nb_left / (num_of_packet))));
+        if (new_fu_payload_size == fu_payload_size){
+            ++num_of_packet;
+            new_fu_payload_size = static_cast<int>(ceil(float(nb_left / (num_of_packet))));
+            assert(new_fu_payload_size != fu_payload_size);
+        }
+        fu_payload_size = new_fu_payload_size;
+    }
+    return err;
+}
+
 srs_error_t SrsRtcFromRtmpBridger::package_nalus(SrsSharedPtrMessage* msg, const vector<SrsSample*>& samples, vector<SrsRtpPacketCacheHelper*>& helpers)
 {
     srs_error_t err = srs_success;
@@ -1464,9 +1481,8 @@ srs_error_t SrsRtcFromRtmpBridger::package_nalus(SrsSharedPtrMessage* msg, const
 
         int num_of_packet = 1 + (nn_bytes - 1) / fu_payload_size;
 
-        if ((nb_left % fu_payload_size) < kRtpMinPayloadSize) {
-            fu_payload_size = static_cast<int>(ceil(float(nb_left / (num_of_packet+1))));
-        }
+        uint8_t remain = nb_left % fu_payload_size;
+        adjust_packet(remain, nb_left, num_of_packet, fu_payload_size);
 
         for (int i = 0; i < num_of_packet; ++i) {
             int packet_size = srs_min(nb_left, fu_payload_size);
@@ -1540,9 +1556,8 @@ srs_error_t SrsRtcFromRtmpBridger::package_fu_a(SrsSharedPtrMessage* msg, SrsSam
 
     int num_of_packet = 1 + (sample->size - 1) / fu_payload_size;
 
-    if ((nb_left % fu_payload_size) < kRtpMinPayloadSize) {
-        fu_payload_size = static_cast<int>(ceil(float(nb_left / (num_of_packet+1))));
-    }
+    uint8_t remain = nb_left % fu_payload_size;
+    adjust_packet(remain, nb_left, num_of_packet, fu_payload_size);
 
     for (int i = 0; i < num_of_packet; ++i) {
         int packet_size = srs_min(nb_left, fu_payload_size);
