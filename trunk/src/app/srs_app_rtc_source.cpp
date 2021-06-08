@@ -1400,7 +1400,7 @@ srs_error_t SrsRtcFromRtmpBridger::package_stap_a(SrsRtcStream* source, SrsShare
     return err;
 }
 
-srs_error_t SrsRtcFromRtmpBridger::adjust_packet(const uint8_t remain, const int &nb_left, int &num_of_packet, int &fu_payload_size)
+srs_error_t SrsRtcFromRtmpBridger::adjust_packet(const uint16_t remain, const int &nb_left, int &num_of_packet, int &fu_payload_size)
 {
     srs_error_t err = srs_success;
     if (remain == 0) {
@@ -1480,7 +1480,7 @@ srs_error_t SrsRtcFromRtmpBridger::package_nalus(SrsSharedPtrMessage* msg, const
 
         int num_of_packet = 1 + (nn_bytes - 1) / fu_payload_size;
 
-        uint8_t remain = nb_left % fu_payload_size;
+        uint16_t remain = nb_left % fu_payload_size;
         adjust_packet(remain, nb_left, num_of_packet, fu_payload_size);
 
         for (int i = 0; i < num_of_packet; ++i) {
@@ -1555,7 +1555,8 @@ srs_error_t SrsRtcFromRtmpBridger::package_fu_a(SrsSharedPtrMessage* msg, SrsSam
 
     int num_of_packet = 1 + (sample->size - 1) / fu_payload_size;
 
-    uint8_t remain = nb_left % fu_payload_size;
+    uint16_t remain = nb_left % fu_payload_size;
+
     adjust_packet(remain, nb_left, num_of_packet, fu_payload_size);
 
     for (int i = 0; i < num_of_packet; ++i) {
