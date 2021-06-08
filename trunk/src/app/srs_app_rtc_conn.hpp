@@ -236,6 +236,7 @@ private:
     // Whether enabled nack.
     bool nack_enabled_;
     bool nack_no_copy_;
+    uint32_t last_report_bytes;
 private:
     // Whether player started.
     bool is_started;
