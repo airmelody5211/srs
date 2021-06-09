@@ -383,6 +383,8 @@ SrsRtcPlayStream::SrsRtcPlayStream(SrsRtcConnection* s, const SrsContextId& cid)
     nack_enabled_ = false;
     nack_no_copy_ = false;
 
+    last_report_bytes = 0;
+
     _srs_config->subscribe(this);
     timer_ = new SrsHourGlass("play", this, 1000 * SRS_UTIME_MILLISECONDS);
     nack_epp = new SrsErrorPithyPrint();
@@ -626,7 +628,9 @@ srs_error_t SrsRtcPlayStream::cycle()
 }
 
 void SrsRtcPlayStream::check_idle(RtcIdleCheckResult *res) {
-    res->bytes = this->get_current_bytes();
+
+    uint32_t current_all_bytes = this->get_current_bytes();
+    res->bytes = current_all_bytes - last_report_bytes;
     res->reqid = session_->username();
     res->localAddr = "";
     res->remoteAddr = "";
@@ -634,6 +638,8 @@ void SrsRtcPlayStream::check_idle(RtcIdleCheckResult *res) {
     if (addrs.size() > 0) {
         res->remoteAddr = addrs[0]->get_peer_ip();
     }
+
+    last_report_bytes = current_all_bytes;
  }
 
  uint32_t SrsRtcPlayStream::get_current_bytes() {

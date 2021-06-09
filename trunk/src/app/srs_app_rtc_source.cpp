@@ -470,7 +470,6 @@ SrsRtcRtmpUpstream::SrsRtcRtmpUpstream(ISrsSourceBridger *bridger, SrsRtcStream 
  srs_error_t SrsRtcRtmpUpstream::start(std::string rtmpurl) {
     srs_error_t err = srs_success;
 
-    //rtmpurl = "rtmp://pili-rtmp.qnsdk.com/sdk-live/test";
     srs_trace("RTC: rtmpurl=%s", rtmpurl.c_str());
 
     if (rtmpurl == "") {
