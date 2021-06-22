@@ -220,6 +220,7 @@ private:
     ISrsSourceBridger* bridger_;
     SrsSimpleRtmpClient* sdk_;
     std::string rtmpurl_;
+    uint64_t last_disconnect_elapsed;
 };
 
 // A Source is a stream, to publish and to play with, binding to SrsRtcPublishStream and SrsRtcPlayStream.
@@ -248,6 +249,8 @@ private:
     bool is_created_;
     // Whether stream is delivering data, that is, DTLS is done.
     bool is_delivering_packets_;
+    // Whether upstream is disconnected.
+    bool is_upstream_disconnected_;
     // Notify stream event to event handler
     std::vector<ISrsRtcStreamEventHandler*> event_handlers_;
 public:
@@ -303,6 +306,8 @@ public:
     std::vector<SrsRtcTrackDescription*> get_track_desc(std::string type, std::string media_type);
 // interface ISrsFastTimer
     uint32_t get_consumers();
+    void set_upstream_disconnected(bool disconnected);
+    bool get_upstream_disconnected();
 private:
     srs_error_t on_timer(srs_utime_t interval, srs_utime_t tick);
 };

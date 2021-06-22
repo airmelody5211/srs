@@ -537,6 +537,8 @@ SrsRtcRtmpUpstream::SrsRtcRtmpUpstream(ISrsSourceBridger *bridger, SrsRtcStream 
                 return err;
             }
         } else if (msg->header.is_audio()) {
+            last_disconnect_elapsed = 0;
+            parent_->set_upstream_disconnected(false);
             SrsSharedPtrMessage msg2;
             if ((err = msg2.create(msg)) != srs_success) {
                 err = srs_error_wrap(err, "create message");
@@ -556,6 +558,9 @@ SrsRtcRtmpUpstream::SrsRtcRtmpUpstream(ISrsSourceBridger *bridger, SrsRtcStream 
  srs_error_t SrsRtcRtmpUpstream::cycle() {
     srs_error_t err = srs_success;
 
+    last_disconnect_elapsed = 0;
+    int reconnTimeout = _srs_config->get_upstream_reconnect_timeout();
+
     srs_usleep(1 * SRS_UTIME_SECONDS);
 
     while (true) {
@@ -573,7 +578,12 @@ SrsRtcRtmpUpstream::SrsRtcRtmpUpstream(ISrsSourceBridger *bridger, SrsRtcStream 
             return err;
         }
 
+        if (last_disconnect_elapsed * 1000 >= reconnTimeout) {
+            parent_->set_upstream_disconnected(true);
+        }
+
         srs_usleep(3 * SRS_UTIME_SECONDS);
+        last_disconnect_elapsed += 3;
     }
 }
 
@@ -670,6 +680,16 @@ void SrsRtcStream::set_source_bridger(ISrsSourceBridger *bridger)
     source_bridger_ = bridger;
 }
 
+void SrsRtcStream::set_upstream_disconnected(bool disconnected)
+{
+    is_upstream_disconnected_ = disconnected;
+}
+
+bool SrsRtcStream::get_upstream_disconnected()
+{
+    return is_upstream_disconnected_;
+}
+
 void SrsRtcStream::check_idle() {
 
      std::vector<SrsRtcRtmpUpstream*>::iterator it;
@@ -681,6 +701,10 @@ void SrsRtcStream::check_idle() {
          } else {
              it++;
          }
+     }
+
+     if (is_upstream_disconnected_) {
+         return;
      }
 
      std::vector<SrsRtcConsumer*>::iterator iter;

@@ -3582,7 +3582,7 @@ srs_error_t SrsConfig::check_normal_config()
             && n != "grace_start_wait" && n != "empty_ip_ok" && n != "disable_daemon_for_docker"
             && n != "inotify_auto_reload" && n != "auto_reload_for_docker" && n != "tcmalloc_release_rate"
             && n != "report_interval" && n != "report_url" && n != "default_rtc_rtmp_source" && n != "report_info_url"
-            && n != "report_info_interval"
+            && n != "report_info_interval" && n != "upstream_reconnect_timeout"
             ) {
             return srs_error_new(ERROR_SYSTEM_CONFIG_INVALID, "illegal directive %s", n.c_str());
         }
@@ -8663,6 +8663,14 @@ int SrsConfig::get_report_info_interval() {
     SrsConfDirective *conf = root->get("report_info_interval");
     if (conf == NULL) {
         return 300;
+    }
+    return atoi(conf->arg0().c_str());
+}
+
+int SrsConfig::get_upstream_reconnect_timeout() {
+    SrsConfDirective *conf = root->get("upstream_reconnect_timeout");
+    if (conf == NULL) {
+        return 30000;
     }
     return atoi(conf->arg0().c_str());
 }
